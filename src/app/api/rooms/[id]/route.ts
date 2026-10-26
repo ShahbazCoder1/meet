@@ -125,7 +125,14 @@ export async function POST(
       const peer = room.peers.get(peerId)!;
       peer.lastSeen = Date.now();
     }
-    return NextResponse.json({ ok: true });
+    const activePeers = Array.from(room.peers.values())
+      .filter((peer) => peer.peerId !== peerId)
+      .map(({ peerId: activePeerId, name: activeName, isHost: activeIsHost }) => ({
+        peerId: activePeerId,
+        name: activeName,
+        isHost: activeIsHost,
+      }));
+    return NextResponse.json({ ok: true, peers: activePeers });
   }
 
   if (action === "leave") {

@@ -54,7 +54,11 @@ export function useWebRTC({
   // References to keep track of active PeerJS objects
   const peerInstanceRef = useRef<any>(null);
   const activeCallsRef = useRef<Map<string, MediaConnection>>(new Map());
+  const pendingIncomingCallsRef = useRef<Map<string, MediaConnection>>(new Map());
   const activeConnectionsRef = useRef<Map<string, DataConnection>>(new Map());
+  const connectingPeersRef = useRef<Set<string>>(new Set());
+  const remotePeerStatesRef = useRef<Map<string, Partial<RemoteParticipant>>>(new Map());
+  const pendingChatRef = useRef<ChatMessageItem[]>([]);
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(localStream);
   localStreamRef.current = localStream;
@@ -111,6 +115,10 @@ export function useWebRTC({
 
   // Update participant state helper
   const updateRemoteParticipant = useCallback((peerId: string, updates: Partial<RemoteParticipant>) => {
+    remotePeerStatesRef.current.set(peerId, {
+      ...remotePeerStatesRef.current.get(peerId),
+      ...updates,
+    });
     setRemoteParticipants((prev) =>
       prev.map((p) => (p.peerId === peerId ? { ...p, ...updates } : p))
     );
@@ -135,6 +143,15 @@ export function useWebRTC({
       } catch (e) {
         console.warn("Error sending initial user-info:", e);
       }
+      // Chat can be sent immediately after joining, before PeerJS has finished
+      // opening the data channel. Replay local messages to this peer on open.
+      pendingChatRef.current.forEach((message) => {
+        try {
+          conn.send({ type: "chat", ...message });
+        } catch (e) {
+          console.warn("Could not sync pending chat message:", e);
+        }
+      });
     };
 
     if (conn.open) {
@@ -192,7 +209,7 @@ export function useWebRTC({
   }, [userName, onNotice, updateRemoteParticipant]);
 
   // Handle incoming or outgoing media call
-  const setupMediaCall = useCallback((call: MediaConnection, remoteName?: string) => {
+  const setupMediaCall = useCallback((call: MediaConnection, remoteName?: string, outgoing = false) => {
     const remotePeerId = call.peer;
     activeCallsRef.current.set(remotePeerId, call);
     const meta = call.metadata as any;
@@ -205,14 +222,16 @@ export function useWebRTC({
         if (existing) {
           return prev.map((p) => (p.peerId === remotePeerId ? { ...p, stream: remoteStream } : p));
         }
+        const peerState = remotePeerStatesRef.current.get(remotePeerId);
         return [
           ...prev,
           {
             peerId: remotePeerId,
-            name: remoteName || meta?.name || "Guest",
+            name: peerState?.name || remoteName || (!outgoing ? meta?.name : undefined) || "Guest",
             stream: remoteStream,
-            micOn: meta?.micOn !== undefined ? Boolean(meta.micOn) : false,
-            cameraOn: meta?.cameraOn !== undefined ? Boolean(meta.cameraOn) : false,
+            // Outgoing call metadata describes us, not the remote participant.
+            micOn: peerState?.micOn ?? (!outgoing && meta?.micOn !== undefined ? Boolean(meta.micOn) : false),
+            cameraOn: peerState?.cameraOn ?? (!outgoing && meta?.cameraOn !== undefined ? Boolean(meta.cameraOn) : false),
           },
         ];
       });
@@ -232,11 +251,56 @@ export function useWebRTC({
     });
   }, []);
 
+  // Use a stable initiator for each pair so simultaneous room discovery cannot
+  // create duplicate data and media connections from both ends.
+  const connectToPeer = useCallback((peerInfo: { peerId: string; name?: string }) => {
+    const peer = peerInstanceRef.current;
+    const localId = peer?.id;
+    const remotePeerId = peerInfo.peerId;
+    if (!peer || !localId || !remotePeerId || remotePeerId === localId) return;
+
+    // The lexicographically smaller peer owns connection creation. Both sides
+    // run discovery, so this also handles peers that joined at the same time.
+    if (localId > remotePeerId) return;
+
+    const connection = activeConnectionsRef.current.get(remotePeerId);
+    if (!connection && !connectingPeersRef.current.has(remotePeerId)) {
+      connectingPeersRef.current.add(remotePeerId);
+      try {
+        const dataConnection = peer.connect(remotePeerId, { metadata: { name: userName } });
+        setupDataConnection(dataConnection);
+        const clearPending = () => connectingPeersRef.current.delete(remotePeerId);
+        dataConnection.on("open", clearPending);
+        dataConnection.on("close", clearPending);
+        dataConnection.on("error", clearPending);
+      } catch (error) {
+        connectingPeersRef.current.delete(remotePeerId);
+        console.warn("Could not connect to room participant:", remotePeerId, error);
+      }
+    }
+
+    if (localStreamRef.current && !activeCallsRef.current.has(remotePeerId)) {
+      try {
+        const call = peer.call(remotePeerId, localStreamRef.current, {
+          metadata: {
+            name: userName,
+            micOn: micOnRef.current,
+            cameraOn: cameraOnRef.current,
+          },
+        });
+        if (call) setupMediaCall(call, peerInfo.name, true);
+      } catch (error) {
+        console.warn("Could not start media call with participant:", remotePeerId, error);
+      }
+    }
+  }, [setupDataConnection, setupMediaCall, userName]);
+
   // Initialize PeerJS and Room connection
   useEffect(() => {
     if (!roomId) return;
     let isCancelled = false;
-    let heartbeatInterval: NodeJS.Timeout;
+    let heartbeatInterval: ReturnType<typeof setInterval>;
+    const pendingIncomingCalls = pendingIncomingCallsRef.current;
 
     async function init() {
       // Dynamic import to prevent SSR issues in Next.js
@@ -284,42 +348,35 @@ export function useWebRTC({
             return;
           }
 
-          // Call all other active peers in room
+          // Discover and connect to active peers. The same reconciliation runs
+          // on each heartbeat to recover simultaneous joins and transient errors.
           if (data.peers && Array.isArray(data.peers)) {
             data.peers.forEach((peerInfo: { peerId: string; name: string }) => {
-              if (peerInfo.peerId === id) return;
-
-              // 1. Data connection for chat & state
-              const conn = peer.connect(peerInfo.peerId, {
-                metadata: { name: userName },
-              });
-              setupDataConnection(conn);
-
-              // 2. Media call if we have local stream
-              if (localStreamRef.current) {
-                const call = peer.call(peerInfo.peerId, localStreamRef.current, {
-                  metadata: {
-                    name: userName,
-                    micOn: micOnRef.current,
-                    cameraOn: cameraOnRef.current,
-                  },
-                });
-                setupMediaCall(call, peerInfo.name);
-              }
+              connectToPeer(peerInfo);
             });
           }
         } catch (e) {
           console.warn("Room registration error:", e);
         }
 
-        // Heartbeat every 20s
-        heartbeatInterval = setInterval(() => {
-          fetch(`/api/rooms/${roomId}`, {
+        // Polling the room roster repairs missed connections (including when
+        // both participants register before either sees the other).
+        const reconcileRoom = async () => {
+          try {
+            const response = await fetch(`/api/rooms/${roomId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "heartbeat", peerId: id }),
-          }).catch(() => {});
-        }, 20000);
+            });
+            const roster = await response.json();
+            if (roster.ok && Array.isArray(roster.peers)) {
+              roster.peers.forEach((peerInfo: { peerId: string; name: string }) => connectToPeer(peerInfo));
+            }
+          } catch {
+            // The next heartbeat retries discovery.
+          }
+        };
+        heartbeatInterval = setInterval(reconcileRoom, 3000);
       });
 
       // Handle incoming data connections
@@ -347,14 +404,16 @@ export function useWebRTC({
           return;
         }
 
-        if (localStreamRef.current) {
-          call.answer(localStreamRef.current);
-          setupMediaCall(call, meta?.name);
-        } else {
-          // If no local stream yet, answer without stream
-          call.answer();
-          setupMediaCall(call, meta?.name);
+        const stream = localStreamRef.current;
+        if (!stream) {
+          // Wait briefly for lobby capture to settle so a just-joined peer gets
+          // a two-way call instead of a permanently one-way call.
+          pendingIncomingCallsRef.current.set(call.peer, call);
+          call.on("close", () => pendingIncomingCallsRef.current.delete(call.peer));
+          return;
         }
+        call.answer(stream);
+        setupMediaCall(call, meta?.name, false);
       });
 
       peer.on("error", (err) => {
@@ -389,13 +448,30 @@ export function useWebRTC({
       // Close all connections and peer
       activeCallsRef.current.forEach((call) => call.close());
       activeCallsRef.current.clear();
+      pendingIncomingCalls.forEach((call) => call.close());
+      pendingIncomingCalls.clear();
       activeConnectionsRef.current.forEach((conn) => conn.close());
       activeConnectionsRef.current.clear();
       if (peerInstanceRef.current) {
         peerInstanceRef.current.destroy();
       }
     };
-  }, [roomId, userName, pin, isHost, setupDataConnection, setupMediaCall, onNotice]);
+  }, [roomId, userName, pin, isHost, setupDataConnection, setupMediaCall, connectToPeer, onNotice]);
+
+  // If joining beat getUserMedia, answer any waiting incoming call once the
+  // local stream arrives so the other participant receives our tracks too.
+  useEffect(() => {
+    if (!localStream) return;
+    pendingIncomingCallsRef.current.forEach((call, remotePeerId) => {
+      try {
+        call.answer(localStream);
+        setupMediaCall(call, (call.metadata as any)?.name, false);
+        pendingIncomingCallsRef.current.delete(remotePeerId);
+      } catch (error) {
+        console.warn("Could not answer pending media call:", remotePeerId, error);
+      }
+    });
+  }, [localStream, setupMediaCall]);
 
   // Audio level meter for speaking indicator on local stream
   useEffect(() => {
@@ -452,6 +528,7 @@ export function useWebRTC({
     };
 
     setChatMessages((prev) => [...prev, messageItem]);
+    pendingChatRef.current.push(messageItem);
 
     broadcast({
       type: "chat",
@@ -617,6 +694,8 @@ export function useWebRTC({
       }).catch(() => {});
     }
     activeCallsRef.current.forEach((c) => c.close());
+    pendingIncomingCallsRef.current.forEach((c) => c.close());
+    pendingIncomingCallsRef.current.clear();
     activeConnectionsRef.current.forEach((c) => c.close());
     if (peerInstanceRef.current) {
       peerInstanceRef.current.destroy();
