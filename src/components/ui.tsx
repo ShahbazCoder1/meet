@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
 import { ArrowRight, Bell, CalendarDays, CircleHelp, Clock3, Link2, MoreHorizontal, Settings2, Sparkles, Video, LayoutDashboard } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -24,11 +27,29 @@ export function Icon({ name, size = 20, className }: { name: IconName; size?: nu
 }
 
 export function Brand({ compact = false }: { compact?: boolean }) {
-  return <Link className={compact ? "room-brand" : "brand"} href="/" aria-label="Meet home"><span className={compact ? "room-brand-mark" : "brand-mark"}>{compact ? "✳" : <><span/><span/><span/><span/></>}</span>{compact ? <>meet<span>.</span></> : <span>meet<span className="brand-period">.</span></span>}</Link>;
+  return <Link className={compact ? "room-brand" : "brand"} href="/" aria-label="Meet home"><span className={compact ? "room-brand-mark" : "brand-mark"} aria-hidden="true"><span/><span/><span/><span/></span>{compact ? <>meet<span>.</span></> : <span className="brand-text">meet<span className="brand-period">.</span></span>}</Link>;
 }
 
-export function Avatar({ image, className = "", alt = "" }: { image: string; className?: string; alt?: string }) {
-  return <img className={`avatar ${className}`} src={`https://images.unsplash.com/${image}?auto=format&fit=crop&w=96&h=96&q=80`} alt={alt}/>;
+export function Avatar({ image, name = "Olivia Rhye", className = "", alt = "" }: { image?: string; name?: string; className?: string; alt?: string }) {
+  const [hasError, setHasError] = useState(false);
+  const initials = (name || "O").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+
+  if (hasError || !image) {
+    return (
+      <div className={`avatar avatar-fallback ${className}`} title={name} aria-label={alt || name}>
+        <span>{initials}</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      className={`avatar ${className}`}
+      src={`https://images.unsplash.com/${image}?auto=format&fit=crop&w=96&h=96&q=80`}
+      alt={alt || name}
+      onError={() => setHasError(true)}
+    />
+  );
 }
 
 export function Toast({ children, room = false }: { children: ReactNode; room?: boolean }) {
