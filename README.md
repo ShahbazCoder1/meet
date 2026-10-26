@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+<p align="center">
+  <img src="public/icon.svg" width="72" height="72" alt="Meet logo">
+</p>
 
-## Getting Started
+<h1 align="center">Meet</h1>
 
-First, run the development server:
+<p align="center">A focused video meeting app for quick conversations and shared work.</p>
+
+<p align="center">
+  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js&logoColor=white" alt="Next.js 16.4.3"></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19.3.0-149eca?logo=react&logoColor=white" alt="React 19.3.0"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white" alt="TypeScript 5"></a>
+  <a href="https://tailwindcss.com/"><img src="https://img.shields.io/badge/Tailwind_CSS-v4-06b6d4?logo=tailwindcss&logoColor=white" alt="Tailwind CSS v4"></a>
+  <a href="https://peerjs.com/"><img src="https://img.shields.io/badge/PeerJS-1.5-ef8e75" alt="PeerJS 1.5"></a>
+</p>
+
+Meet provides a dark, meeting-first workspace with a dashboard for starting or joining calls and a responsive meeting room for participants.
+
+## Features
+
+- Start a new room or join with a meeting link
+- Preview and control your microphone and camera
+- Choose available audio and video input devices
+- Share your screen
+- Use in-room chat and participant list
+- Adapt the meeting layout for desktop and mobile screens
+
+## Requirements
+
+- Node.js compatible with the installed Next.js version
+- npm
+- A modern browser with camera and microphone access for calling features
+
+Camera and microphone access requires HTTPS in deployed environments. Browsers allow these permissions on `localhost` during development.
+
+## Getting started
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Available scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the local development server |
+| `npm run build` | Create a production build |
+| `npm run start` | Run the production server |
+| `npm run lint` | Run ESLint |
 
-## Learn More
+## Project structure
 
-To learn more about Next.js, take a look at the following resources:
+```text
+src/
+  app/          App Router pages and the room API route
+  components/   Dashboard, meeting room, and shared UI components
+  lib/          WebRTC, media, meeting data, and Tailwind utilities
+public/
+  icon.svg      Meet brand icon
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deployment notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The app uses PeerJS for peer-to-peer media and an API route for room presence. The current room roster is stored in process memory. Deployments that run multiple server instances need shared storage for consistent room discovery.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+For Next.js deployment options, see the [Next.js deployment guide](https://nextjs.org/docs/app/building-your-application/deploying).
