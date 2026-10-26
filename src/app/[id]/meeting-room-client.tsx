@@ -19,7 +19,6 @@ import {
   getLocalMediaStream,
   stopMediaStream,
   getAvailableDevices,
-  createBlackVideoTrack,
   type AvailableDevices,
 } from "@/lib/media";
 import { useWebRTC } from "@/lib/use-webrtc";
@@ -169,45 +168,17 @@ export default function MeetingRoomClient({
     }
   }, [localStream]);
 
-  const handleLobbyToggleCamera = useCallback(async () => {
-    if (cameraOn) {
-      if (localStream) {
-        const track = localStream.getVideoTracks().find((t) => !(t as any)._isBlackPlaceholder);
-        if (track) {
-          track.stop();
-          localStream.removeTrack(track);
-        }
-        // Add black placeholder so RTCPeerConnection video transceiver is maintained
-        const blackTrack = createBlackVideoTrack();
-        localStream.addTrack(blackTrack);
-      }
-      setCameraOn(false);
-    } else {
-      try {
-        const fresh = await getLocalMediaStream({
-          audio: false,
-          video: selectedVideoDevice ? { deviceId: selectedVideoDevice } : true,
-        });
-        const track = fresh.getVideoTracks()[0];
-        if (track) {
-          if (localStream) {
-            // Remove black placeholder tracks
-            localStream.getVideoTracks().forEach((t) => {
-              t.stop();
-              localStream.removeTrack(t);
-            });
-            localStream.addTrack(track);
-          } else {
-            setLocalStream(fresh);
-          }
-          setCameraOn(true);
-        }
-      } catch (e) {
-        console.warn("Could not re-enable camera in lobby:", e);
-        flash("Could not access camera.");
+  const handleLobbyToggleCamera = useCallback(() => {
+    if (localStream) {
+      const track = localStream.getVideoTracks()[0];
+      if (track) {
+        track.enabled = !track.enabled;
+        setCameraOn(track.enabled);
+        return;
       }
     }
-  }, [cameraOn, localStream, selectedVideoDevice, flash]);
+    setCameraOn((prev) => !prev);
+  }, [localStream]);
 
   // WebRTC connection
   const webrtc = useWebRTC({
