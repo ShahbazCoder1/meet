@@ -49,6 +49,7 @@ export function ParticipantTile({
   inRail?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const initial = (participant.name || "G")[0].toUpperCase();
   const hasVideo = Boolean(participant.stream && participant.cameraOn !== false);
 
@@ -58,6 +59,13 @@ export function ParticipantTile({
       videoRef.current.play().catch(() => {});
     }
   }, [participant.stream, hasVideo]);
+
+  useEffect(() => {
+    if (audioRef.current && participant.stream && !participant.isLocal) {
+      audioRef.current.srcObject = participant.stream;
+      audioRef.current.play().catch(() => {});
+    }
+  }, [participant.stream, participant.isLocal]);
 
   return (
     <article
@@ -69,12 +77,17 @@ export function ParticipantTile({
           : "w-full aspect-video"
       }`}
     >
+      {/* Dedicated audio element for remote participants so audio plays even when camera is off */}
+      {!participant.isLocal && participant.stream && (
+        <audio ref={audioRef} autoPlay playsInline />
+      )}
+
       {hasVideo ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          muted={participant.isLocal}
+          muted
           className={`w-full h-full object-cover absolute inset-0 block rounded-[inherit] ${
             participant.isLocal ? "scale-x-[-1]" : ""
           }`}

@@ -19,6 +19,7 @@ import {
   getLocalMediaStream,
   stopMediaStream,
   getAvailableDevices,
+  createBlackVideoTrack,
   type AvailableDevices,
 } from "@/lib/media";
 import { useWebRTC } from "@/lib/use-webrtc";
@@ -171,11 +172,14 @@ export default function MeetingRoomClient({
   const handleLobbyToggleCamera = useCallback(async () => {
     if (cameraOn) {
       if (localStream) {
-        const track = localStream.getVideoTracks()[0];
+        const track = localStream.getVideoTracks().find((t) => !(t as any)._isBlackPlaceholder);
         if (track) {
           track.stop();
           localStream.removeTrack(track);
         }
+        // Add black placeholder so RTCPeerConnection video transceiver is maintained
+        const blackTrack = createBlackVideoTrack();
+        localStream.addTrack(blackTrack);
       }
       setCameraOn(false);
     } else {
@@ -187,6 +191,11 @@ export default function MeetingRoomClient({
         const track = fresh.getVideoTracks()[0];
         if (track) {
           if (localStream) {
+            // Remove black placeholder tracks
+            localStream.getVideoTracks().forEach((t) => {
+              t.stop();
+              localStream.removeTrack(t);
+            });
             localStream.addTrack(track);
           } else {
             setLocalStream(fresh);

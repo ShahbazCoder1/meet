@@ -92,6 +92,30 @@ export async function getScreenMediaStream(): Promise<MediaStream> {
 }
 
 /**
+ * Create a silent/blank black video track (used to maintain WebRTC video transceivers
+ * when camera is disabled or before camera is started).
+ */
+export function createBlackVideoTrack(): MediaStreamTrack {
+  if (typeof window === "undefined") {
+    throw new Error("createBlackVideoTrack can only be called in the browser.");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 360;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "#18181a";
+    ctx.fillRect(0, 0, 640, 360);
+  }
+  const stream = (canvas as any).captureStream ? (canvas as any).captureStream(1) : (canvas as any).mozCaptureStream(1);
+  const track = stream.getVideoTracks()[0];
+  if (track) {
+    (track as any)._isBlackPlaceholder = true;
+  }
+  return track;
+}
+
+/**
  * Safely stop all tracks in a MediaStream.
  */
 export function stopMediaStream(stream?: MediaStream | null) {

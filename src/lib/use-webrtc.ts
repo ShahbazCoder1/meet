@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { MediaConnection, DataConnection } from "peerjs";
-import { getScreenMediaStream, stopMediaStream, createAudioLevelMeter } from "@/lib/media";
+import { getScreenMediaStream, stopMediaStream, createAudioLevelMeter, createBlackVideoTrack } from "@/lib/media";
 
 export interface RemoteParticipant {
   peerId: string;
@@ -65,6 +65,32 @@ export function useWebRTC({
   micOnRef.current = micOn;
   const cameraOnRef = useRef(initialCameraOn);
   cameraOnRef.current = cameraOn;
+
+  // Sync state with initial values before joining or upon room connection
+  const hasInitializedRef = useRef(false);
+  useEffect(() => {
+    if (!roomId) {
+      setMicOn(initialMicOn);
+      micOnRef.current = initialMicOn;
+      setCameraOn(initialCameraOn);
+      cameraOnRef.current = initialCameraOn;
+      hasInitializedRef.current = false;
+    } else if (!hasInitializedRef.current) {
+      setMicOn(initialMicOn);
+      micOnRef.current = initialMicOn;
+      setCameraOn(initialCameraOn);
+      cameraOnRef.current = initialCameraOn;
+      hasInitializedRef.current = true;
+
+      // Ensure audio track enabled state matches initialMicOn
+      if (localStreamRef.current) {
+        const audioTrack = localStreamRef.current.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = initialMicOn;
+        }
+      }
+    }
+  }, [roomId, initialMicOn, initialCameraOn]);
 
   // Broadcast data payload to all connected peers
   const broadcast = useCallback((data: unknown) => {
@@ -256,6 +282,9 @@ export function useWebRTC({
 
               // 2. Media call if we have local stream
               if (localStreamRef.current) {
+                if (localStreamRef.current.getVideoTracks().length === 0) {
+                  localStreamRef.current.addTrack(createBlackVideoTrack());
+                }
                 const call = peer.call(peerInfo.peerId, localStreamRef.current, {
                   metadata: { name: userName },
                 });
@@ -303,6 +332,9 @@ export function useWebRTC({
         }
 
         if (localStreamRef.current) {
+          if (localStreamRef.current.getVideoTracks().length === 0) {
+            localStreamRef.current.addTrack(createBlackVideoTrack());
+          }
           call.answer(localStreamRef.current);
           setupMediaCall(call, meta?.name);
         } else {
@@ -444,26 +476,28 @@ export function useWebRTC({
     if (cameraOnRef.current) {
       // Turn off: stop video track to immediately release hardware and shut off camera light
       if (localStreamRef.current) {
-        const videoTrack = localStreamRef.current.getVideoTracks()[0];
+        const videoTrack = localStreamRef.current.getVideoTracks().find((t) => !(t as any)._isBlackPlaceholder);
         if (videoTrack) {
           videoTrack.stop();
           localStreamRef.current.removeTrack(videoTrack);
         }
+        // Add black placeholder to maintain video transceiver capability on peer connections
+        const blackTrack = createBlackVideoTrack();
+        localStreamRef.current.addTrack(blackTrack);
+
+        activeCallsRef.current.forEach((call) => {
+          const sender = call.peerConnection?.getSenders().find((s) => s.track?.kind === "video");
+          if (sender) {
+            try {
+              sender.replaceTrack(blackTrack);
+            } catch (e) {
+              console.warn(e);
+            }
+          }
+        });
       }
       setCameraOn(false);
       cameraOnRef.current = false;
-
-      // Replace track on peer connections with null
-      activeCallsRef.current.forEach((call) => {
-        const sender = call.peerConnection?.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) {
-          try {
-            sender.replaceTrack(null as any);
-          } catch (e) {
-            console.warn(e);
-          }
-        }
-      });
 
       broadcast({
         type: "state-update",
@@ -478,6 +512,11 @@ export function useWebRTC({
         const freshStream = await getLocalMediaStream({ video: true, audio: false });
         const newTrack = freshStream.getVideoTracks()[0];
         if (newTrack && localStreamRef.current) {
+          // Remove black placeholder tracks
+          localStreamRef.current.getVideoTracks().forEach((t) => {
+            t.stop();
+            localStreamRef.current?.removeTrack(t);
+          });
           localStreamRef.current.addTrack(newTrack);
           setCameraOn(true);
           cameraOnRef.current = true;
