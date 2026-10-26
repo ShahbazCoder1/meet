@@ -1,5 +1,7 @@
 "use client";
 
+import { twCss } from "@/lib/tailwind-classes";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -30,29 +32,29 @@ export function Sidebar({ open, onToggle, onNotify }: SidebarProps) {
     <>
       {open && (
         <div
-          className="sidebar-backdrop"
+          className={twCss("sidebar-backdrop")}
           onClick={onToggle}
           aria-label="Close sidebar"
           role="button"
           tabIndex={0}
         />
       )}
-      <aside className={`sidebar ${open ? "open" : "collapsed"}`}>
-        <div className="sidebar-header">
+      <aside className={twCss(`sidebar ${open ? "open" : "collapsed"}`)}>
+        <div className={twCss("sidebar-header")}>
           {open ? (
             <>
-              <Link className="brand" href="/" aria-label="Meet home" title="Meet">
-                <span className="brand-mark" aria-hidden="true">
+              <Link className={twCss("brand")} href="/" aria-label="Meet home" title="Meet">
+                <span className={twCss("brand-mark")} aria-hidden="true">
                   <span />
                   <span />
                   <span />
                   <span />
                 </span>
-                <span className="brand-text">meet<span className="brand-period">.</span></span>
+                <span className={twCss("brand-text")}>meet<span className={twCss("brand-period")}>.</span></span>
               </Link>
               <button
                 type="button"
-                className="sidebar-collapse-btn"
+                className={twCss("sidebar-collapse-btn")}
                 aria-label="Collapse sidebar"
                 title="Collapse sidebar"
                 onClick={onToggle}
@@ -63,28 +65,28 @@ export function Sidebar({ open, onToggle, onNotify }: SidebarProps) {
           ) : (
             <button
               type="button"
-              className="brand-collapsed-toggle"
+              className={twCss("brand-collapsed-toggle")}
               aria-label="Expand sidebar"
               title="Expand sidebar"
               onClick={onToggle}
             >
-              <span className="brand-mark" aria-hidden="true">
+              <span className={twCss("brand-mark")} aria-hidden="true">
                 <span />
                 <span />
                 <span />
                 <span />
               </span>
-              <span className="brand-expand-icon" aria-hidden="true">
+              <span className={twCss("brand-expand-icon")} aria-hidden="true">
                 <PanelLeft size={20} />
               </span>
             </button>
           )}
         </div>
 
-        <nav className="sidebar-nav" aria-label="Main Navigation">
+        <nav className={twCss("sidebar-nav")} aria-label="Main Navigation">
           <button
             type="button"
-            className="nav-item active"
+            className={twCss("nav-item active")}
             onClick={() => router.push("/")}
             title="Home"
           >
@@ -93,12 +95,12 @@ export function Sidebar({ open, onToggle, onNotify }: SidebarProps) {
           </button>
         </nav>
 
-        <div className="sidebar-spacer" />
+        <div className={twCss("sidebar-spacer")} />
 
-        <div className="sidebar-footer">
+        <div className={twCss("sidebar-footer")}>
           <button
             type="button"
-            className="profile-button"
+            className={twCss("profile-button")}
             onClick={() => setMenuOpen((prev) => !prev)}
             title="Olivia Rhye - Account"
             aria-expanded={menuOpen}
@@ -106,24 +108,24 @@ export function Sidebar({ open, onToggle, onNotify }: SidebarProps) {
             <Avatar
               image="photo-1534528741775-53994a69daeb"
               name="Olivia Rhye"
-              className="profile-avatar"
+              className={twCss("profile-avatar")}
             />
-            <span className="profile-copy">
+            <span className={twCss("profile-copy")}>
               <b>Olivia Rhye</b>
               <small>olivia@northstar.co</small>
             </span>
-            <span className="profile-more" aria-hidden="true">
+            <span className={twCss("profile-more")} aria-hidden="true">
               <MoreHorizontal size={16} />
             </span>
           </button>
 
           {menuOpen && (
-            <div className="profile-popover" role="dialog" aria-label="Account details">
+            <div className={twCss("profile-popover")} role="dialog" aria-label="Account details">
               <b>Olivia Rhye</b>
               <span>olivia@northstar.co</span>
               <button
                 type="button"
-                className="signout-button"
+                className={twCss("signout-button")}
                 onClick={handleSignOut}
               >
                 <LogOut size={14} />
