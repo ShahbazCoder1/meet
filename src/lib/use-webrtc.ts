@@ -61,6 +61,10 @@ export function useWebRTC({
   const screenStreamRef = useRef<MediaStream | null>(null);
   const screenShareCallsRef = useRef<Map<string, MediaConnection>>(new Map());
   const stopScreenShareRef = useRef<() => void>(() => {});
+  const micOnRef = useRef(initialMicOn);
+  micOnRef.current = micOn;
+  const cameraOnRef = useRef(initialCameraOn);
+  cameraOnRef.current = cameraOn;
 
   // Broadcast data payload to all connected peers
   const broadcast = useCallback((data: unknown) => {
@@ -93,9 +97,9 @@ export function useWebRTC({
         type: "user-info",
         peerId: peerInstanceRef.current?.id,
         name: userName,
-        micOn,
-        cameraOn,
-        isSharing: Boolean(screenStream),
+        micOn: micOnRef.current,
+        cameraOn: cameraOnRef.current,
+        isSharing: Boolean(screenStreamRef.current),
       });
     });
 
@@ -145,7 +149,7 @@ export function useWebRTC({
       console.warn("DataConnection error:", err);
       activeConnectionsRef.current.delete(remotePeerId);
     });
-  }, [userName, micOn, cameraOn, screenStream, onNotice, updateRemoteParticipant]);
+  }, [userName, onNotice, updateRemoteParticipant]);
 
   // Handle incoming or outgoing media call
   const setupMediaCall = useCallback((call: MediaConnection, remoteName?: string) => {
@@ -350,19 +354,38 @@ export function useWebRTC({
 
   // Audio level meter for speaking indicator on local stream
   useEffect(() => {
-    if (!localStream || !micOn) return;
+    if (!localStream) return;
+    let lastSpeaking = false;
     const cleanup = createAudioLevelMeter(localStream, (volume) => {
+      // If mic is off, do not broadcast speaking state; reset if was speaking
+      if (!micOnRef.current) {
+        if (lastSpeaking) {
+          lastSpeaking = false;
+          broadcast({
+            type: "state-update",
+            peerId: localPeerId,
+            isSpeaking: false,
+            micOn: false,
+            cameraOn: cameraOnRef.current,
+          });
+        }
+        return;
+      }
+
       const isSpeaking = volume > 25;
-      broadcast({
-        type: "state-update",
-        peerId: localPeerId,
-        isSpeaking,
-        micOn,
-        cameraOn,
-      });
+      if (isSpeaking !== lastSpeaking) {
+        lastSpeaking = isSpeaking;
+        broadcast({
+          type: "state-update",
+          peerId: localPeerId,
+          isSpeaking,
+          micOn: true,
+          cameraOn: cameraOnRef.current,
+        });
+      }
     });
     return cleanup;
-  }, [localStream, micOn, cameraOn, localPeerId, broadcast]);
+  }, [localStream, localPeerId, broadcast]);
 
   // Send a chat message
   const sendChatMessage = useCallback((text: string) => {
@@ -398,21 +421,27 @@ export function useWebRTC({
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setMicOn(audioTrack.enabled);
+        micOnRef.current = audioTrack.enabled;
         broadcast({
           type: "state-update",
           peerId: localPeerId,
           micOn: audioTrack.enabled,
-          cameraOn,
+          cameraOn: cameraOnRef.current,
+          isSpeaking: false,
         });
       }
     } else {
-      setMicOn((prev) => !prev);
+      setMicOn((prev) => {
+        const next = !prev;
+        micOnRef.current = next;
+        return next;
+      });
     }
-  }, [cameraOn, localPeerId, broadcast]);
+  }, [localPeerId, broadcast]);
 
   // Toggle local camera (hardware stop & re-acquire to turn laptop camera light OFF)
   const toggleCamera = useCallback(async () => {
-    if (cameraOn) {
+    if (cameraOnRef.current) {
       // Turn off: stop video track to immediately release hardware and shut off camera light
       if (localStreamRef.current) {
         const videoTrack = localStreamRef.current.getVideoTracks()[0];
@@ -422,6 +451,7 @@ export function useWebRTC({
         }
       }
       setCameraOn(false);
+      cameraOnRef.current = false;
 
       // Replace track on peer connections with null
       activeCallsRef.current.forEach((call) => {
@@ -438,7 +468,7 @@ export function useWebRTC({
       broadcast({
         type: "state-update",
         peerId: localPeerId,
-        micOn,
+        micOn: micOnRef.current,
         cameraOn: false,
       });
     } else {
@@ -450,6 +480,7 @@ export function useWebRTC({
         if (newTrack && localStreamRef.current) {
           localStreamRef.current.addTrack(newTrack);
           setCameraOn(true);
+          cameraOnRef.current = true;
 
           activeCallsRef.current.forEach((call) => {
             const sender = call.peerConnection?.getSenders().find((s) => s.track?.kind === "video");
@@ -461,7 +492,7 @@ export function useWebRTC({
           broadcast({
             type: "state-update",
             peerId: localPeerId,
-            micOn,
+            micOn: micOnRef.current,
             cameraOn: true,
           });
         }
@@ -470,7 +501,7 @@ export function useWebRTC({
         if (onNotice) onNotice("Could not access camera.");
       }
     }
-  }, [cameraOn, micOn, localPeerId, broadcast, onNotice]);
+  }, [localPeerId, broadcast, onNotice]);
 
   // Stop Screen Sharing
   const stopScreenShare = useCallback(() => {
