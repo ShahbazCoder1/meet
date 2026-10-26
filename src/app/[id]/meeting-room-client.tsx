@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { Brand, Toast } from "@/components/ui";
-import { MeetingChat, MeetingControlBar, MeetingLobby, ParticipantGrid, type Participant } from "@/components/meeting-room";
+import { MeetingChat, MeetingControlBar, MeetingLobby, ParticipantGrid, PeoplePanel, ShareStage, type Participant } from "@/components/meeting-room";
 
 const participants: Participant[] = [
   { name: "Marcus Chen", photo: "photo-1500648767791-00dcc994a43e", speaking: true },
@@ -18,6 +18,8 @@ export default function MeetingRoomClient({ id, title }: { id: string; title: st
   const [micOn, setMicOn] = useState(false);
   const [cameraOn, setCameraOn] = useState(true);
   const [chatOpen, setChatOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<string[]>([]);
   const [elapsed, setElapsed] = useState(0);
@@ -28,9 +30,10 @@ export default function MeetingRoomClient({ id, title }: { id: string; title: st
   const flash = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(""), 2200); };
   const copyLink = async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); window.setTimeout(() => setCopied(false), 1800); } catch { flash("Your meeting link is ready to share."); } };
   const sendMessage = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (message.trim()) { setMessages((items) => [...items, message.trim()]); setMessage(""); } };
-  if (!joined) return <MeetingLobby id={id} title={title} micOn={micOn} cameraOn={cameraOn} copied={copied} onToggleMic={() => setMicOn((value) => !value)} onToggleCamera={() => setCameraOn((value) => !value)} onJoin={() => setJoined(true)} onCopy={copyLink}/>;
-  return <main className="meeting-shell"><header className="meeting-topbar"><Brand compact/><div className="room-heading"><h1>{title}</h1><span><i/> {clock}</span></div><div className="room-header-actions"><span className="room-encrypted">✳ &nbsp;End-to-end encrypted</span><button className="copy-room-link" onClick={copyLink}>{copied ? "Copied!" : "Copy link"}<ArrowRight size={14} strokeWidth={1.7}/></button></div></header><section className={`meeting-stage ${chatOpen ? "chat-visible" : ""}`}><ParticipantGrid participants={participants}/><div className="stage-top-pill"><span className="stage-live-dot"/> LIVE SESSION <span>·</span> ROOM {id.toUpperCase()}</div><div className="stage-bottom-note"><span className="stage-note-spark">✳</span> Good to see you all here.</div></section>{chatOpen&&<MeetingChat messages={messages} message={message} onMessageChange={setMessage} onSend={sendMessage} onClose={() => setChatOpen(false)} clock={clock}/>}<MeetingControlBar micOn={micOn} cameraOn={cameraOn} chatOpen={chatOpen} clock={clock} roomId={id} onToggleMic={() => setMicOn((value) => !value)} onToggleCamera={() => setCameraOn((value) => !value)} onToggleChat={() => setChatOpen((value) => !value)} onAction={flash}/>{notice&&<Toast room>{notice}</Toast>}</main>;
+  if (!joined) return <MeetingLobby title={title} micOn={micOn} cameraOn={cameraOn} copied={copied} onToggleMic={() => setMicOn((value) => !value)} onToggleCamera={() => setCameraOn((value) => !value)} onJoin={() => setJoined(true)} onCopy={copyLink}/>;
+  return <main className={`meeting-shell ${sharing ? "is-sharing" : ""}`}><header className="meeting-topbar"><Brand compact/><div className="room-heading"><span className="meeting-elapsed"><i/> {clock}</span></div><div className="room-header-actions"><span className="room-encrypted">✳ &nbsp;End-to-end encrypted</span><button className="copy-room-link" onClick={copyLink}>{copied ? "Copied!" : "Copy link"}<ArrowRight size={14} strokeWidth={1.7}/></button></div></header><section className={`meeting-stage ${chatOpen || peopleOpen ? "chat-visible" : ""} ${sharing ? "sharing-stage" : ""}`}>{sharing ? <ShareStage participants={participants} onStop={() => setSharing(false)}/> : <ParticipantGrid participants={participants}/>}</section>{chatOpen&&<MeetingChat messages={messages} message={message} onMessageChange={setMessage} onSend={sendMessage} onClose={() => setChatOpen(false)} clock={clock}/ >}{peopleOpen&&<PeoplePanel participants={participants} onClose={() => setPeopleOpen(false)}/>}<MeetingControlBar micOn={micOn} cameraOn={cameraOn} chatOpen={chatOpen} peopleOpen={peopleOpen} sharing={sharing} clock={clock} roomId={id} onToggleMic={() => setMicOn((value) => !value)} onToggleCamera={() => setCameraOn((value) => !value)} onToggleChat={() => { setChatOpen(value => !value); setPeopleOpen(false); }} onTogglePeople={() => { setPeopleOpen(value => !value); setChatOpen(false); }} onToggleShare={() => setSharing(value => !value)}/>{notice&&<Toast room>{notice}</Toast>}</main>;
 }
+
 
 
 

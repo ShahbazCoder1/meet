@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { LayoutDashboard, PanelLeftClose, PanelLeft, MoreHorizontal, LogOut } from "lucide-react";
+import { Video, PanelLeftClose, PanelLeft, MoreHorizontal, LogOut } from "lucide-react";
 import { Avatar } from "@/components/ui";
 
 export interface SidebarProps {
@@ -88,7 +88,7 @@ export function Sidebar({ open, onToggle, onNotify }: SidebarProps) {
             onClick={() => router.push("/")}
             title="Home"
           >
-            <LayoutDashboard size={20} aria-hidden="true" />
+            <Video size={20} aria-hidden="true" />
             <span>Home</span>
           </button>
         </nav>
