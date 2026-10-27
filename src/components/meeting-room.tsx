@@ -22,6 +22,7 @@ import {
   Lock,
 } from "lucide-react";
 import { Avatar, Brand } from "@/components/ui";
+import type { BackgroundMode } from "@/lib/background-effects";
 import {
   getAvailableDevices,
   createAudioLevelMeter,
@@ -57,17 +58,25 @@ export function ParticipantTile({
   );
 
   useEffect(() => {
-    if (videoRef.current && participant.stream) {
-      videoRef.current.srcObject = participant.stream;
-      videoRef.current.play().catch(() => {});
+    const video = videoRef.current;
+    if (video && participant.stream && hasVideo) {
+      video.srcObject = participant.stream;
+      video.play().catch(() => {});
     }
+    return () => {
+      if (video) video.srcObject = null;
+    };
   }, [participant.stream, hasVideo]);
 
   useEffect(() => {
-    if (audioRef.current && participant.stream && !participant.isLocal) {
-      audioRef.current.srcObject = participant.stream;
-      audioRef.current.play().catch(() => {});
+    const audio = audioRef.current;
+    if (audio && participant.stream && !participant.isLocal) {
+      audio.srcObject = participant.stream;
+      audio.play().catch(() => {});
     }
+    return () => {
+      if (audio) audio.srcObject = null;
+    };
   }, [participant.stream, participant.isLocal]);
 
   return (
@@ -622,6 +631,8 @@ export function MeetingLobby({
   localStream,
   micOn,
   cameraOn,
+  background,
+  onBackgroundChange,
   copied,
   hasPinRequired,
   onToggleMic,
@@ -633,14 +644,15 @@ export function MeetingLobby({
   localStream: MediaStream | null;
   micOn: boolean;
   cameraOn: boolean;
+  background: BackgroundMode;
+  onBackgroundChange: (mode: BackgroundMode) => void;
   copied: boolean;
   hasPinRequired?: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
-  onJoin: (settings: { name: string; pin?: string; background: string }) => void;
+  onJoin: (settings: { name: string; pin?: string; background: BackgroundMode }) => void;
   onCopy: () => void;
 }) {
-  const [background, setBackground] = useState<string>("none");
   const [userName, setUserName] = useState("Olivia Rhye");
   const [roomPin, setRoomPin] = useState("");
   const [devices, setDevices] = useState<AvailableDevices>({
@@ -660,9 +672,11 @@ export function MeetingLobby({
 
   // Hook up video stream to preview
   useEffect(() => {
-    if (previewVideoRef.current && localStream) {
-      previewVideoRef.current.srcObject = localStream;
-    }
+    const video = previewVideoRef.current;
+    if (video && localStream && cameraOn) video.srcObject = localStream;
+    return () => {
+      if (video) video.srcObject = null;
+    };
   }, [localStream, cameraOn]);
 
   // Load available devices
@@ -709,9 +723,8 @@ export function MeetingLobby({
       </header>
       <section className={twCss("lobby-content lobby-focused")}>
         <div className={twCss("lobby-preview-column")}>
-          <div className={twCss(`lobby-preview background-${background}`)}>
+          <div className={twCss("lobby-preview")}>
             <div className={twCss(`self-preview ${cameraOn ? "camera-on" : "camera-off"}`)}>
-              <div className={twCss("preview-background-layer")} />
               {cameraOn ? (
                 <video
                   ref={previewVideoRef}
@@ -726,9 +739,6 @@ export function MeetingLobby({
                 </div>
               )}
               <span className={twCss("preview-name")}>{userName} (you)</span>
-              <span className={twCss("preview-preview-label")}>
-                <i /> LIVE PREVIEW
-              </span>
             </div>
           </div>
           <div className={twCss("preview-switches")}>
@@ -900,7 +910,7 @@ export function MeetingLobby({
                           background === option.id ? "selected" : ""
                         }`)}
                         onClick={() => {
-                          setBackground(option.id);
+                          onBackgroundChange(option.id);
                           setOpenDeviceMenu(null);
                         }}
                         aria-pressed={background === option.id}
@@ -942,22 +952,25 @@ export function MeetingLobby({
             placeholder="Enter your name"
           />
 
-          <div className={twCss("lobby-pin-wrap")}>
-            <label className={twCss("lobby-pin-label")} htmlFor="room-pin">
-              <span>Meeting PIN {hasPinRequired ? "(Required)" : "(Optional)"}</span>
-              <small style={{ color: "#888", fontSize: "9px" }}>
-                {hasPinRequired ? "Host requires a PIN" : "Leave empty if not set"}
-              </small>
-            </label>
-            <input
-              id="room-pin"
-              className={twCss("lobby-pin-input")}
-              value={roomPin}
-              onChange={(e) => setRoomPin(e.target.value)}
-              placeholder="e.g. 1234"
-              type="text"
-            />
-          </div>
+          {/* PIN input hidden for now; set to true to make visible */}
+          {false && (
+            <div className={twCss("lobby-pin-wrap")}>
+              <label className={twCss("lobby-pin-label")} htmlFor="room-pin">
+                <span>Meeting PIN {hasPinRequired ? "(Required)" : "(Optional)"}</span>
+                <small style={{ color: "#888", fontSize: "9px" }}>
+                  {hasPinRequired ? "Host requires a PIN" : "Leave empty if not set"}
+                </small>
+              </label>
+              <input
+                id="room-pin"
+                className={twCss("lobby-pin-input")}
+                value={roomPin}
+                onChange={(e) => setRoomPin(e.target.value)}
+                placeholder="e.g. 1234"
+                type="text"
+              />
+            </div>
+          )}
 
           <button className={twCss("join-room-cta")} onClick={handleJoinClick}>
             Join meeting <ArrowRight size={17} />

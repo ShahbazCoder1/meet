@@ -11,6 +11,37 @@ export interface AvailableDevices {
   audioOutputs: MediaDeviceInfo[];
 }
 
+// Keep ownership of every camera track opened by getUserMedia. A stale stream
+// reference (for example during Strict Mode effect cleanup) must not leave the
+// physical camera active after the UI has turned video off.
+const mediaGlobal = globalThis as typeof globalThis & {
+  __meetCameraTracks?: Set<MediaStreamTrack>;
+};
+const cameraTracks = mediaGlobal.__meetCameraTracks ??= new Set<MediaStreamTrack>();
+
+function registerCameraTracks(stream: MediaStream) {
+  stream.getVideoTracks().forEach((track) => {
+    cameraTracks.add(track);
+    track.addEventListener("ended", () => cameraTracks.delete(track), { once: true });
+  });
+}
+
+export function releaseAllCameraTracks() {
+  cameraTracks.forEach((track) => {
+    if (track.readyState === "live") track.stop();
+  });
+  cameraTracks.clear();
+}
+
+export function releaseOtherCameraTracks(keepTracks: MediaStreamTrack[] = []) {
+  const keep = new Set(keepTracks);
+  cameraTracks.forEach((track) => {
+    if (keep.has(track)) return;
+    if (track.readyState === "live") track.stop();
+    cameraTracks.delete(track);
+  });
+}
+
 /**
  * Request real user media stream with optional specific device IDs.
  */
@@ -35,16 +66,19 @@ export async function getLocalMediaStream(options: {
       : false,
   };
 
+  let stream: MediaStream;
   try {
-    return await navigator.mediaDevices.getUserMedia(constraints);
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err: unknown) {
     // If exact device constraint fails, fallback to default devices
     console.warn("Failed to get media with exact constraints, trying defaults:", err);
-    return await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: Boolean(options.audio),
       video: Boolean(options.video),
     });
   }
+  registerCameraTracks(stream);
+  return stream;
 }
 
 /**
@@ -124,6 +158,7 @@ export function stopMediaStream(stream?: MediaStream | null) {
     stream.getTracks().forEach((track) => {
       try {
         track.stop();
+        if (track.kind === "video") cameraTracks.delete(track);
       } catch (e) {
         console.warn("Error stopping track:", e);
       }
