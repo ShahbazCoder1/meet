@@ -35,7 +35,6 @@ interface UseWebRTCOptions {
   isHost?: boolean;
   initialMicOn?: boolean;
   initialCameraOn?: boolean;
-  selectedVideoDevice?: string;
   onLocalStreamChange?: (stream: MediaStream) => void;
   onNotice?: (msg: string) => void;
 }
@@ -48,7 +47,6 @@ export function useWebRTC({
   isHost,
   initialMicOn = true,
   initialCameraOn = true,
-  selectedVideoDevice,
   onLocalStreamChange,
   onNotice,
 }: UseWebRTCOptions) {
@@ -158,20 +156,10 @@ export function useWebRTC({
     });
   }, [createCallStream]);
 
-  const releaseCameraCapture = useCallback(() => {
-    const currentStream = localStreamRef.current;
-    const videoTracks = currentStream?.getVideoTracks().filter((track) => track.readyState === "live") ?? [];
-    if (!currentStream || videoTracks.length === 0) return;
-
-    videoTracks.forEach((track) => track.stop());
-    const retainedTracks = currentStream.getTracks().filter(
-      (track) => track.kind !== "video" && track.readyState === "live"
-    );
-    const nextStream = new MediaStream(retainedTracks);
-    localStreamRef.current = nextStream;
-    onLocalStreamChange?.(nextStream);
-    if (roomId) syncCallTracks(nextStream);
-  }, [onLocalStreamChange, roomId, syncCallTracks]);
+  useEffect(() => {
+    localStreamRef.current = localStream;
+    if (roomId) syncCallTracks(localStream);
+  }, [localStream, roomId, syncCallTracks]);
 
   // Keep pre-join preferences in sync. Once joined, in-room toggles are owned
   // by this hook and do not change these props, so they are not reset.
@@ -206,16 +194,6 @@ export function useWebRTC({
       });
     }
   }, [roomId, initialMicOn, initialCameraOn]);
-
-  useEffect(() => {
-    localStreamRef.current = localStream;
-    const cameraEnabled = roomId ? cameraOnRef.current : initialCameraOn;
-    if (!cameraEnabled && localStream?.getVideoTracks().some((track) => track.readyState === "live")) {
-      releaseCameraCapture();
-      return;
-    }
-    if (roomId) syncCallTracks(localStream);
-  }, [initialCameraOn, localStream, releaseCameraCapture, roomId, syncCallTracks]);
 
   // Broadcast data payload to all connected peers
   const broadcast = useCallback((data: unknown) => {
@@ -641,12 +619,7 @@ export function useWebRTC({
     if (existingTrack) return existingTrack;
 
     try {
-      const captured = await getLocalMediaStream({
-        audio: kind === "audio",
-        video: kind === "video"
-          ? selectedVideoDevice ? { deviceId: selectedVideoDevice } : true
-          : false,
-      });
+      const captured = await getLocalMediaStream({ audio: kind === "audio", video: kind === "video" });
       const newTrack = captured.getTracks().find((track) => track.kind === kind && track.readyState === "live");
       if (!newTrack) throw new Error(`No ${kind} track was returned by the browser.`);
 
@@ -655,10 +628,6 @@ export function useWebRTC({
       ) ?? [];
       currentStream?.getTracks().filter((track) => track.kind === kind).forEach((track) => track.stop());
       const nextStream = new MediaStream([...retainedTracks, newTrack]);
-      if (kind === "video") {
-        cameraOnRef.current = true;
-        setCameraOn(true);
-      }
       localStreamRef.current = nextStream;
       onLocalStreamChange?.(nextStream);
       syncCallTracks(nextStream);
@@ -668,7 +637,7 @@ export function useWebRTC({
       onNotice?.(`Could not access your ${kind === "audio" ? "microphone" : "camera"}. Check browser permissions.`);
       return null;
     }
-  }, [onLocalStreamChange, onNotice, selectedVideoDevice, syncCallTracks]);
+  }, [onLocalStreamChange, onNotice, syncCallTracks]);
 
   // Toggle local microphone. If capture was unavailable at join, request it now.
   const toggleMic = useCallback(async () => {
@@ -693,19 +662,9 @@ export function useWebRTC({
   const toggleCamera = useCallback(async () => {
     const next = !cameraOnRef.current;
     let videoTrack = localStreamRef.current?.getVideoTracks().find((track) => track.readyState === "live") ?? null;
-    if (next && !videoTrack) {
-      cameraOnRef.current = true;
-      videoTrack = await ensureLocalTrack("video");
-    }
-    if (next && !videoTrack) {
-      cameraOnRef.current = false;
-      return;
-    }
-    if (next && videoTrack) {
-      videoTrack.enabled = true;
-    } else {
-      releaseCameraCapture();
-    }
+    if (next && !videoTrack) videoTrack = await ensureLocalTrack("video");
+    if (next && !videoTrack) return;
+    if (videoTrack) videoTrack.enabled = next;
 
     setCameraOn(next);
     cameraOnRef.current = next;
@@ -715,7 +674,7 @@ export function useWebRTC({
       micOn: micOnRef.current,
       cameraOn: next,
     });
-  }, [localPeerId, broadcast, ensureLocalTrack, releaseCameraCapture]);
+  }, [localPeerId, broadcast, ensureLocalTrack]);
 
   // Stop Screen Sharing
   const stopScreenShare = useCallback(() => {
