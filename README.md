@@ -12,6 +12,7 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white" alt="TypeScript 5"></a>
   <a href="https://tailwindcss.com/"><img src="https://img.shields.io/badge/Tailwind_CSS-v4-06b6d4?logo=tailwindcss&logoColor=white" alt="Tailwind CSS v4"></a>
   <a href="https://peerjs.com/"><img src="https://img.shields.io/badge/PeerJS-1.5-ef8e75" alt="PeerJS 1.5"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
 Meet provides a dark, meeting-first workspace with a dashboard for starting or joining calls and a responsive meeting room for participants.
@@ -78,3 +79,8 @@ public/
 The app uses PeerJS for peer-to-peer media and an API route for room presence. The current room roster is stored in process memory. Deployments that run multiple server instances need shared storage for consistent room discovery.
 
 For Next.js deployment options, see the [Next.js deployment guide](https://nextjs.org/docs/app/building-your-application/deploying).
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
