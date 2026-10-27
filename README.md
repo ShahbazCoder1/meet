@@ -16,6 +16,10 @@
 
 Meet provides a dark, meeting-first workspace with a dashboard for starting or joining calls and a responsive meeting room for participants.
 
+## Demo Video
+
+https://github.com/user-attachments/assets/9742440b-04dd-48b0-80c5-1f2ab051ea9e
+
 ## Features
 
 - Start a new room or join with a meeting link
