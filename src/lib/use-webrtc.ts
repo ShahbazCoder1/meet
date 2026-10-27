@@ -35,6 +35,7 @@ interface UseWebRTCOptions {
   isHost?: boolean;
   initialMicOn?: boolean;
   initialCameraOn?: boolean;
+  videoDeviceId?: string;
   onLocalStreamChange?: (stream: MediaStream) => void;
   onNotice?: (msg: string) => void;
 }
@@ -47,6 +48,7 @@ export function useWebRTC({
   isHost,
   initialMicOn = true,
   initialCameraOn = true,
+  videoDeviceId,
   onLocalStreamChange,
   onNotice,
 }: UseWebRTCOptions) {
@@ -54,7 +56,8 @@ export function useWebRTC({
   const [isConnected, setIsConnected] = useState(false);
   const [remoteParticipants, setRemoteParticipants] = useState<RemoteParticipant[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessageItem[]>([]);
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
   const [sharingPeerId, setSharingPeerId] = useState<string | null>(null);
   const [micOn, setMicOn] = useState(initialMicOn);
   const [cameraOn, setCameraOn] = useState(initialCameraOn);
@@ -74,13 +77,20 @@ export function useWebRTC({
     audioContext: AudioContext;
     oscillator: OscillatorNode;
   } | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
+  const localScreenStreamRef = useRef<MediaStream | null>(null);
+  const sharingPeerIdRef = useRef<string | null>(null);
+  const cameraBusyRef = useRef(false);
   const screenShareCallsRef = useRef<Map<string, MediaConnection>>(new Map());
   const stopScreenShareRef = useRef<() => void>(() => {});
   const micOnRef = useRef(initialMicOn);
   micOnRef.current = micOn;
   const cameraOnRef = useRef(initialCameraOn);
   cameraOnRef.current = cameraOn;
+
+  const updateSharingPeerId = useCallback((peerId: string | null) => {
+    sharingPeerIdRef.current = peerId;
+    setSharingPeerId(peerId);
+  }, []);
 
   const getPlaceholderMedia = useCallback(() => {
     if (placeholderMediaRef.current) return placeholderMediaRef.current;
@@ -233,10 +243,22 @@ export function useWebRTC({
           name: userName,
           micOn: micOnRef.current,
           cameraOn: cameraOnRef.current,
-          isSharing: Boolean(screenStreamRef.current),
+          isSharing: Boolean(localScreenStreamRef.current),
         });
       } catch (e) {
         console.warn("Error sending initial user-info:", e);
+      }
+      // A peer that joins during an active presentation must receive the
+      // existing screen call as well as the current sharing state.
+      if (localScreenStreamRef.current && peerInstanceRef.current) {
+        try {
+          const screenCall = peerInstanceRef.current.call(remotePeerId, localScreenStreamRef.current, {
+            metadata: { type: "screen-share", name: userName },
+          });
+          if (screenCall) screenShareCallsRef.current.set(remotePeerId, screenCall);
+        } catch (error) {
+          console.warn("Could not share the active presentation with a new participant:", error);
+        }
       }
       // Chat can be sent immediately after joining, before PeerJS has finished
       // opening the data channel. Replay local messages to this peer on open.
@@ -277,7 +299,7 @@ export function useWebRTC({
           cameraOn: data.cameraOn,
         });
         if (data.isSharing) {
-          setSharingPeerId(remotePeerId);
+          updateSharingPeerId(remotePeerId);
         }
       } else if (data.type === "state-update") {
         updateRemoteParticipant(remotePeerId, {
@@ -286,10 +308,10 @@ export function useWebRTC({
           isSpeaking: data.isSpeaking,
         });
       } else if (data.type === "screen-share-started") {
-        setSharingPeerId(data.peerId);
+        updateSharingPeerId(data.peerId);
         if (onNotice) onNotice(`${data.name || "Someone"} started sharing their screen`);
       } else if (data.type === "screen-share-stopped") {
-        setSharingPeerId((curr) => (curr === data.peerId ? null : curr));
+        if (sharingPeerIdRef.current === data.peerId) updateSharingPeerId(null);
       }
     });
 
@@ -301,7 +323,7 @@ export function useWebRTC({
       console.warn("DataConnection error:", err);
       activeConnectionsRef.current.delete(remotePeerId);
     });
-  }, [userName, onNotice, updateRemoteParticipant]);
+  }, [userName, onNotice, updateRemoteParticipant, updateSharingPeerId]);
 
   // Handle incoming or outgoing media call
   const setupMediaCall = useCallback((call: MediaConnection, remoteName?: string, outgoing = false) => {
@@ -336,7 +358,7 @@ export function useWebRTC({
       activeCallsRef.current.delete(remotePeerId);
       remoteStreamsRef.current.delete(remotePeerId);
       setRemoteParticipants((prev) => prev.filter((p) => p.peerId !== remotePeerId));
-      setSharingPeerId((curr) => (curr === remotePeerId ? null : curr));
+      if (sharingPeerIdRef.current === remotePeerId) updateSharingPeerId(null);
     });
 
     call.on("error", (err) => {
@@ -344,7 +366,7 @@ export function useWebRTC({
       activeCallsRef.current.delete(remotePeerId);
       setRemoteParticipants((prev) => prev.filter((p) => p.peerId !== remotePeerId));
     });
-  }, []);
+  }, [updateSharingPeerId]);
 
   // Use a stable initiator for each pair so simultaneous room discovery cannot
   // create duplicate data and media connections from both ends.
@@ -484,16 +506,16 @@ export function useWebRTC({
         if (meta?.type === "screen-share") {
           call.answer();
           call.on("stream", (remoteScreenStream: MediaStream) => {
-            setScreenStream(remoteScreenStream);
-            setSharingPeerId(call.peer);
+            setRemoteScreenStream(remoteScreenStream);
+            updateSharingPeerId(call.peer);
           });
           call.on("close", () => {
-            setScreenStream(null);
-            setSharingPeerId((curr) => (curr === call.peer ? null : curr));
+            setRemoteScreenStream(null);
+            if (sharingPeerIdRef.current === call.peer) updateSharingPeerId(null);
           });
           call.on("error", () => {
-            setScreenStream(null);
-            setSharingPeerId((curr) => (curr === call.peer ? null : curr));
+            setRemoteScreenStream(null);
+            if (sharingPeerIdRef.current === call.peer) updateSharingPeerId(null);
           });
           return;
         }
@@ -520,9 +542,9 @@ export function useWebRTC({
 
       // Stop any active media streams to release hardware & laptop camera LED
       stopMediaStream(localStreamRef.current);
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach((t) => t.stop());
-        screenStreamRef.current = null;
+      if (localScreenStreamRef.current) {
+        localScreenStreamRef.current.getTracks().forEach((t) => t.stop());
+        localScreenStreamRef.current = null;
       }
       screenShareCallsRef.current.forEach((c) => c.close());
       screenShareCallsRef.current.clear();
@@ -546,7 +568,7 @@ export function useWebRTC({
         peerInstanceRef.current.destroy();
       }
     };
-  }, [roomId, userName, pin, isHost, setupDataConnection, setupMediaCall, connectToPeer, createCallStream, stopPlaceholderMedia, onNotice]);
+  }, [roomId, userName, pin, isHost, setupDataConnection, setupMediaCall, connectToPeer, createCallStream, stopPlaceholderMedia, onNotice, updateSharingPeerId]);
 
   // Audio level meter for speaking indicator on local stream
   useEffect(() => {
@@ -611,7 +633,7 @@ export function useWebRTC({
     });
   }, [userName, broadcast]);
 
-  const ensureLocalTrack = useCallback(async (kind: "audio" | "video") => {
+  const ensureLocalTrack = useCallback(async (kind: "audio" | "video", deviceId?: string) => {
     const currentStream = localStreamRef.current;
     const existingTrack = currentStream?.getTracks().find(
       (track) => track.kind === kind && track.readyState === "live"
@@ -619,7 +641,10 @@ export function useWebRTC({
     if (existingTrack) return existingTrack;
 
     try {
-      const captured = await getLocalMediaStream({ audio: kind === "audio", video: kind === "video" });
+      const captured = await getLocalMediaStream({
+        audio: kind === "audio",
+        video: kind === "video" ? { deviceId: deviceId || undefined } : false,
+      });
       const newTrack = captured.getTracks().find((track) => track.kind === kind && track.readyState === "live");
       if (!newTrack) throw new Error(`No ${kind} track was returned by the browser.`);
 
@@ -659,37 +684,58 @@ export function useWebRTC({
   }, [localPeerId, broadcast, ensureLocalTrack]);
 
   // Toggle local camera. If capture was unavailable at join, request it now.
-  const toggleCamera = useCallback(async () => {
-    const next = !cameraOnRef.current;
-    let videoTrack = localStreamRef.current?.getVideoTracks().find((track) => track.readyState === "live") ?? null;
-    if (next && !videoTrack) videoTrack = await ensureLocalTrack("video");
-    if (next && !videoTrack) return;
-    if (videoTrack) videoTrack.enabled = next;
+  const releaseVideoTrack = useCallback(() => {
+    const current = localStreamRef.current;
+    if (!current) return;
+    current.getVideoTracks().forEach((track) => track.stop());
+    const nextStream = new MediaStream(current.getAudioTracks().filter((track) => track.readyState === "live"));
+    localStreamRef.current = nextStream;
+    onLocalStreamChange?.(nextStream);
+    syncCallTracks(nextStream);
+  }, [onLocalStreamChange, syncCallTracks]);
 
-    setCameraOn(next);
-    cameraOnRef.current = next;
-    broadcast({
-      type: "state-update",
-      peerId: localPeerId,
-      micOn: micOnRef.current,
-      cameraOn: next,
-    });
-  }, [localPeerId, broadcast, ensureLocalTrack]);
+  const toggleCamera = useCallback(async () => {
+    if (cameraBusyRef.current) return;
+    cameraBusyRef.current = true;
+    try {
+      const next = !cameraOnRef.current;
+      let videoTrack = localStreamRef.current?.getVideoTracks().find((track) => track.readyState === "live") ?? null;
+      if (!next) {
+        releaseVideoTrack();
+        videoTrack = null;
+      } else if (!videoTrack) {
+        videoTrack = await ensureLocalTrack("video", videoDeviceId);
+      }
+      if (next && !videoTrack) return;
+      if (next && videoTrack) videoTrack.enabled = true;
+
+      setCameraOn(next);
+      cameraOnRef.current = next;
+      broadcast({
+        type: "state-update",
+        peerId: localPeerId,
+        micOn: micOnRef.current,
+        cameraOn: next,
+      });
+    } finally {
+      cameraBusyRef.current = false;
+    }
+  }, [localPeerId, broadcast, ensureLocalTrack, releaseVideoTrack, videoDeviceId]);
 
   // Stop Screen Sharing
   const stopScreenShare = useCallback(() => {
+    // Only the participant who owns the captured display stream can stop it.
+    if (!localScreenStreamRef.current) return;
     // 1. Stop all tracks on screen stream to release display capture
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((track) => {
-        track.onended = null;
-        track.stop();
-      });
-      screenStreamRef.current = null;
-    }
+    localScreenStreamRef.current.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+    localScreenStreamRef.current = null;
 
     // 2. Clear state
-    setScreenStream(null);
-    setSharingPeerId(null);
+    setLocalScreenStream(null);
+    updateSharingPeerId(null);
 
     // 3. Close secondary screen-share calls to peers
     screenShareCallsRef.current.forEach((call) => {
@@ -706,19 +752,33 @@ export function useWebRTC({
       type: "screen-share-stopped",
       peerId: localPeerId || peerInstanceRef.current?.id,
     });
-  }, [localPeerId, broadcast]);
+  }, [localPeerId, broadcast, updateSharingPeerId]);
 
   stopScreenShareRef.current = stopScreenShare;
 
   // Start Screen Sharing
   const startScreenShare = useCallback(async () => {
+    const myPeerId = localPeerId || peerInstanceRef.current?.id || "local";
+    const existingPresenter = sharingPeerIdRef.current;
+    if (existingPresenter && existingPresenter !== myPeerId) {
+      const presenter = remoteParticipants.find((participant) => participant.peerId === existingPresenter);
+      onNotice?.(`${presenter?.name || "Another participant"} is already presenting.`);
+      return;
+    }
+    if (localScreenStreamRef.current) return;
     try {
       const screenMedia = await getScreenMediaStream();
-      screenStreamRef.current = screenMedia;
-      setScreenStream(screenMedia);
+      const presenterAfterCapture = sharingPeerIdRef.current;
+      if (presenterAfterCapture && presenterAfterCapture !== myPeerId) {
+        screenMedia.getTracks().forEach((track) => track.stop());
+        const presenter = remoteParticipants.find((participant) => participant.peerId === presenterAfterCapture);
+        onNotice?.(`${presenter?.name || "Another participant"} is already presenting.`);
+        return;
+      }
+      localScreenStreamRef.current = screenMedia;
+      setLocalScreenStream(screenMedia);
 
-      const myPeerId = localPeerId || peerInstanceRef.current?.id || "local";
-      setSharingPeerId(myPeerId);
+      updateSharingPeerId(myPeerId);
 
       const screenVideoTrack = screenMedia.getVideoTracks()[0];
 
@@ -759,13 +819,13 @@ export function useWebRTC({
         if (onNotice) onNotice("Could not start screen share.");
       }
     }
-  }, [localPeerId, userName, broadcast, onNotice]);
+  }, [localPeerId, userName, broadcast, onNotice, remoteParticipants, updateSharingPeerId]);
 
   // Clean disconnect
   const leaveRoom = useCallback(() => {
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((t) => t.stop());
-      screenStreamRef.current = null;
+    if (localScreenStreamRef.current) {
+      localScreenStreamRef.current.getTracks().forEach((t) => t.stop());
+      localScreenStreamRef.current = null;
     }
     screenShareCallsRef.current.forEach((c) => c.close());
     screenShareCallsRef.current.clear();
@@ -791,7 +851,9 @@ export function useWebRTC({
     isConnected,
     remoteParticipants,
     chatMessages,
-    screenStream,
+    localScreenStream,
+    remoteScreenStream,
+    isLocalSharing: Boolean(localScreenStream),
     sharingPeerId,
     micOn,
     cameraOn,

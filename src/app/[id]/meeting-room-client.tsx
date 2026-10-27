@@ -71,6 +71,7 @@ export default function MeetingRoomClient({
   });
   const [selectedAudioDevice, setSelectedAudioDevice] = useState<string>("");
   const [selectedVideoDevice, setSelectedVideoDevice] = useState<string>("");
+  const lobbyCameraBusyRef = useRef(false);
 
   // In-room UI panels
   const [chatOpen, setChatOpen] = useState(false);
@@ -103,7 +104,10 @@ export default function MeetingRoomClient({
 
     async function setupLobbyMedia() {
       try {
-        const stream = await getLocalMediaStream({ audio: true, video: true });
+        const stream = await getLocalMediaStream({
+          audio: true,
+          video: cameraOnRef.current,
+        });
         if (!active) {
           stopMediaStream(stream);
           return;
@@ -116,9 +120,9 @@ export default function MeetingRoomClient({
           setMicOn(false);
         }
         const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
-        if (videoTrack) {
-          videoTrack.enabled = cameraOnRef.current;
-        } else {
+        if (videoTrack && !cameraOnRef.current) {
+          videoTrack.stop();
+        } else if (!videoTrack) {
           cameraOnRef.current = false;
           setCameraOn(false);
         }
@@ -153,7 +157,9 @@ export default function MeetingRoomClient({
     try {
       const newStream = await getLocalMediaStream({
         audio: { deviceId },
-        video: selectedVideoDevice ? { deviceId: selectedVideoDevice } : true,
+        video: cameraOnRef.current
+          ? selectedVideoDevice ? { deviceId: selectedVideoDevice } : true
+          : false,
       });
       const newAudioTrack = newStream.getAudioTracks()[0];
       if (newAudioTrack) newAudioTrack.enabled = micOnRef.current;
@@ -169,6 +175,7 @@ export default function MeetingRoomClient({
   // Switch video device
   const handleSelectVideoDevice = useCallback(async (deviceId: string) => {
     setSelectedVideoDevice(deviceId);
+    if (!cameraOnRef.current) return;
     try {
       const newStream = await getLocalMediaStream({
         audio: selectedAudioDevice ? { deviceId: selectedAudioDevice } : true,
@@ -202,19 +209,36 @@ export default function MeetingRoomClient({
   }, [localStream]);
 
   const handleLobbyToggleCamera = useCallback(() => {
-    if (localStream) {
-      const track = localStream.getVideoTracks()[0];
-      if (track) {
-        track.enabled = !track.enabled;
-        cameraOnRef.current = track.enabled;
-        setCameraOn(track.enabled);
-        return;
-      }
-    }
+    if (lobbyCameraBusyRef.current) return;
     const next = !cameraOnRef.current;
-    cameraOnRef.current = next;
-    setCameraOn(next);
-  }, [localStream]);
+    if (!next) {
+      const audioTracks = localStream?.getAudioTracks().filter((track) => track.readyState === "live") ?? [];
+      localStream?.getVideoTracks().forEach((track) => track.stop());
+      cameraOnRef.current = false;
+      setCameraOn(false);
+      setLocalStream(new MediaStream(audioTracks));
+      return;
+    }
+
+    lobbyCameraBusyRef.current = true;
+    void getLocalMediaStream({
+      audio: false,
+      video: selectedVideoDevice ? { deviceId: selectedVideoDevice } : true,
+    }).then((captured) => {
+      const videoTrack = captured.getVideoTracks().find((track) => track.readyState === "live");
+      if (!videoTrack) throw new Error("No camera track was returned by the browser.");
+      const audioTracks = localStream?.getAudioTracks().filter((track) => track.readyState === "live") ?? [];
+      const nextStream = new MediaStream([...audioTracks, videoTrack]);
+      cameraOnRef.current = true;
+      setCameraOn(true);
+      setLocalStream(nextStream);
+    }).catch((error) => {
+      console.warn("Could not enable lobby camera:", error);
+      flash("Could not access your camera. Check browser permissions.");
+    }).finally(() => {
+      lobbyCameraBusyRef.current = false;
+    });
+  }, [localStream, selectedVideoDevice, flash]);
 
   // WebRTC connection
   const webrtc = useWebRTC({
@@ -225,6 +249,7 @@ export default function MeetingRoomClient({
     pin: roomPin,
     initialMicOn: micOn,
     initialCameraOn: cameraOn,
+    videoDeviceId: selectedVideoDevice,
     onNotice: flash,
   });
 
@@ -316,19 +341,17 @@ export default function MeetingRoomClient({
   }, [userName, localStream, webrtc.localPeerId, webrtc.micOn, webrtc.cameraOn, webrtc.remoteParticipants]);
 
   // Screen share status
-  const isSomeoneSharing = Boolean(webrtc.screenStream || webrtc.sharingPeerId);
-  const isLocalSharing = Boolean(webrtc.screenStream);
+  const isSomeoneSharing = Boolean(webrtc.localScreenStream || webrtc.remoteScreenStream || webrtc.sharingPeerId);
+  const isLocalSharing = webrtc.isLocalSharing;
 
   // Presenter stream & name
   const presenterParticipant = useMemo(() => {
-    if (isLocalSharing) return { name: "You", stream: webrtc.screenStream };
+    if (isLocalSharing) return { name: "You", stream: webrtc.localScreenStream };
     const remote = webrtc.remoteParticipants.find(
       (p) => p.peerId === webrtc.sharingPeerId
     );
-    return remote
-      ? { name: remote.name, stream: remote.stream }
-      : { name: "A participant", stream: null };
-  }, [isLocalSharing, webrtc.screenStream, webrtc.sharingPeerId, webrtc.remoteParticipants]);
+    return { name: remote?.name ?? "A participant", stream: webrtc.remoteScreenStream };
+  }, [isLocalSharing, webrtc.localScreenStream, webrtc.remoteScreenStream, webrtc.sharingPeerId, webrtc.remoteParticipants]);
 
   // If still in lobby
   if (!joined) {
@@ -415,6 +438,8 @@ export default function MeetingRoomClient({
         chatOpen={chatOpen}
         peopleOpen={peopleOpen}
         sharing={isLocalSharing}
+        sharingElsewhere={Boolean(webrtc.sharingPeerId && !isLocalSharing)}
+        presenterName={webrtc.remoteParticipants.find((p) => p.peerId === webrtc.sharingPeerId)?.name}
         clock={clock}
         roomId={id}
         devices={devices}

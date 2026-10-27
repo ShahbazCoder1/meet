@@ -263,6 +263,8 @@ export function MeetingControlBar({
   chatOpen,
   peopleOpen,
   sharing,
+  sharingElsewhere,
+  presenterName,
   clock,
   roomId,
   devices,
@@ -283,6 +285,8 @@ export function MeetingControlBar({
   chatOpen: boolean;
   peopleOpen: boolean;
   sharing: boolean;
+  sharingElsewhere?: boolean;
+  presenterName?: string;
   clock: string;
   roomId: string;
   devices?: AvailableDevices;
@@ -423,6 +427,8 @@ export function MeetingControlBar({
           className={twCss(`call-control ${sharing ? "selected-control" : ""}`)}
           onClick={onToggleShare}
           aria-pressed={sharing}
+          disabled={Boolean(sharingElsewhere)}
+          title={sharingElsewhere ? `${presenterName || "Another participant"} is presenting` : undefined}
         >
           <MonitorUp />
           <span>{sharing ? "Stop share" : "Share screen"}</span>
