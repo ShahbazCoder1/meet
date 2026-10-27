@@ -51,7 +51,10 @@ export function ParticipantTile({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const initial = (participant.name || "G")[0].toUpperCase();
-  const hasVideo = Boolean(participant.stream && participant.cameraOn !== false);
+  const hasVideo = Boolean(
+    participant.stream?.getVideoTracks().some((track) => track.readyState === "live") &&
+    participant.cameraOn === true
+  );
 
   useEffect(() => {
     if (videoRef.current && participant.stream) {
@@ -116,7 +119,7 @@ export function ParticipantTile({
 
       {/* Mic status pill */}
       <span className="absolute right-2.5 bottom-2.5 z-10 size-6 rounded-md bg-[#171719]/85 backdrop-blur-sm flex items-center justify-center text-[#dfd8d2] border border-white/5 shadow-sm">
-        {participant.micOn !== false ? (
+        {participant.micOn === true ? (
           <Mic size={13} />
         ) : (
           <MicOff size={13} className="text-[#f0a087]" />

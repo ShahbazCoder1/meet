@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { MediaConnection, DataConnection } from "peerjs";
-import { getScreenMediaStream, stopMediaStream, createAudioLevelMeter } from "@/lib/media";
+import {
+  createAudioLevelMeter,
+  createBlackVideoTrack,
+  getLocalMediaStream,
+  getScreenMediaStream,
+  stopMediaStream,
+} from "@/lib/media";
 
 export interface RemoteParticipant {
   peerId: string;
@@ -29,6 +35,7 @@ interface UseWebRTCOptions {
   isHost?: boolean;
   initialMicOn?: boolean;
   initialCameraOn?: boolean;
+  onLocalStreamChange?: (stream: MediaStream) => void;
   onNotice?: (msg: string) => void;
 }
 
@@ -40,6 +47,7 @@ export function useWebRTC({
   isHost,
   initialMicOn = true,
   initialCameraOn = true,
+  onLocalStreamChange,
   onNotice,
 }: UseWebRTCOptions) {
   const [localPeerId, setLocalPeerId] = useState<string>("");
@@ -54,14 +62,18 @@ export function useWebRTC({
   // References to keep track of active PeerJS objects
   const peerInstanceRef = useRef<any>(null);
   const activeCallsRef = useRef<Map<string, MediaConnection>>(new Map());
-  const pendingIncomingCallsRef = useRef<Map<string, MediaConnection>>(new Map());
   const activeConnectionsRef = useRef<Map<string, DataConnection>>(new Map());
   const connectingPeersRef = useRef<Set<string>>(new Set());
   const remotePeerStatesRef = useRef<Map<string, Partial<RemoteParticipant>>>(new Map());
   const pendingChatRef = useRef<ChatMessageItem[]>([]);
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(localStream);
-  localStreamRef.current = localStream;
+  const placeholderMediaRef = useRef<{
+    audioTrack: MediaStreamTrack;
+    videoTrack: MediaStreamTrack;
+    audioContext: AudioContext;
+    oscillator: OscillatorNode;
+  } | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const screenShareCallsRef = useRef<Map<string, MediaConnection>>(new Map());
   const stopScreenShareRef = useRef<() => void>(() => {});
@@ -70,33 +82,116 @@ export function useWebRTC({
   const cameraOnRef = useRef(initialCameraOn);
   cameraOnRef.current = cameraOn;
 
-  // Sync state with initial values before joining or upon room connection
-  const hasInitializedRef = useRef(false);
-  useEffect(() => {
-    if (!roomId) {
-      setMicOn(initialMicOn);
-      micOnRef.current = initialMicOn;
-      setCameraOn(initialCameraOn);
-      cameraOnRef.current = initialCameraOn;
-      hasInitializedRef.current = false;
-    } else if (!hasInitializedRef.current) {
-      setMicOn(initialMicOn);
-      micOnRef.current = initialMicOn;
-      setCameraOn(initialCameraOn);
-      cameraOnRef.current = initialCameraOn;
-      hasInitializedRef.current = true;
+  const getPlaceholderMedia = useCallback(() => {
+    if (placeholderMediaRef.current) return placeholderMediaRef.current;
 
-      // Ensure audio and video track enabled states match initial preferences
-      if (localStreamRef.current) {
-        const audioTrack = localStreamRef.current.getAudioTracks()[0];
-        if (audioTrack) {
-          audioTrack.enabled = initialMicOn;
+    const AudioContextConstructor = window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) throw new Error("Web Audio is not available in this browser.");
+    const audioContext = new AudioContextConstructor();
+    const destination = audioContext.createMediaStreamDestination();
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    gain.gain.value = 0;
+    oscillator.connect(gain);
+    gain.connect(destination);
+    oscillator.start();
+
+    const audioTrack = destination.stream.getAudioTracks()[0];
+    let videoTrack: MediaStreamTrack | undefined;
+    try {
+      videoTrack = createBlackVideoTrack();
+    } catch (error) {
+      oscillator.stop();
+      void audioContext.close();
+      throw error;
+    }
+    if (!audioTrack || !videoTrack) {
+      oscillator.stop();
+      void audioContext.close();
+      throw new Error("Could not prepare meeting media tracks.");
+    }
+
+    placeholderMediaRef.current = { audioTrack, videoTrack, audioContext, oscillator };
+    return placeholderMediaRef.current;
+  }, []);
+
+  const createCallStream = useCallback((stream: MediaStream | null) => {
+    const audioTrack = stream?.getAudioTracks().find((track) => track.readyState === "live");
+    const videoTrack = stream?.getVideoTracks().find((track) => track.readyState === "live");
+    if (audioTrack && videoTrack) return new MediaStream([audioTrack, videoTrack]);
+
+    const placeholder = getPlaceholderMedia();
+    return new MediaStream([audioTrack ?? placeholder.audioTrack, videoTrack ?? placeholder.videoTrack]);
+  }, [getPlaceholderMedia]);
+
+  const stopPlaceholderMedia = useCallback(() => {
+    const placeholder = placeholderMediaRef.current;
+    if (!placeholder) return;
+    placeholder.audioTrack.stop();
+    placeholder.videoTrack.stop();
+    try {
+      placeholder.oscillator.stop();
+    } catch {
+      // The oscillator may already have stopped during cleanup.
+    }
+    void placeholder.audioContext.close();
+    placeholderMediaRef.current = null;
+  }, []);
+
+  const syncCallTracks = useCallback((stream: MediaStream | null) => {
+    const callStream = createCallStream(stream);
+    const tracksByKind = new Map(callStream.getTracks().map((track) => [track.kind, track]));
+    activeCallsRef.current.forEach((call) => {
+      const connection = call.peerConnection;
+      if (!connection) return;
+      connection.getSenders().forEach((sender) => {
+        const nextTrack = sender.track && tracksByKind.get(sender.track.kind);
+        if (nextTrack && sender.track !== nextTrack) {
+          void sender.replaceTrack(nextTrack).catch((error) => {
+            console.warn("Could not update the outgoing media track:", error);
+          });
         }
-        const videoTrack = localStreamRef.current.getVideoTracks()[0];
-        if (videoTrack) {
-          videoTrack.enabled = initialCameraOn;
+      });
+    });
+  }, [createCallStream]);
+
+  useEffect(() => {
+    localStreamRef.current = localStream;
+    if (roomId) syncCallTracks(localStream);
+  }, [localStream, roomId, syncCallTracks]);
+
+  // Keep pre-join preferences in sync. Once joined, in-room toggles are owned
+  // by this hook and do not change these props, so they are not reset.
+  useEffect(() => {
+    setMicOn(initialMicOn);
+    micOnRef.current = initialMicOn;
+    setCameraOn(initialCameraOn);
+    cameraOnRef.current = initialCameraOn;
+
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) audioTrack.enabled = initialMicOn;
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
+      if (videoTrack) videoTrack.enabled = initialCameraOn;
+    }
+
+    if (roomId) {
+      const stateUpdate = {
+        type: "state-update",
+        peerId: peerInstanceRef.current?.id,
+        micOn: initialMicOn,
+        cameraOn: initialCameraOn,
+        isSpeaking: false,
+      };
+      activeConnectionsRef.current.forEach((connection) => {
+        if (!connection.open) return;
+        try {
+          connection.send(stateUpdate);
+        } catch (error) {
+          console.warn("Could not sync the initial media state:", error);
         }
-      }
+      });
     }
   }, [roomId, initialMicOn, initialCameraOn]);
 
@@ -279,9 +374,9 @@ export function useWebRTC({
       }
     }
 
-    if (localStreamRef.current && !activeCallsRef.current.has(remotePeerId)) {
+    if (!activeCallsRef.current.has(remotePeerId)) {
       try {
-        const call = peer.call(remotePeerId, localStreamRef.current, {
+        const call = peer.call(remotePeerId, createCallStream(localStreamRef.current), {
           metadata: {
             name: userName,
             micOn: micOnRef.current,
@@ -293,14 +388,13 @@ export function useWebRTC({
         console.warn("Could not start media call with participant:", remotePeerId, error);
       }
     }
-  }, [setupDataConnection, setupMediaCall, userName]);
+  }, [createCallStream, setupDataConnection, setupMediaCall, userName]);
 
   // Initialize PeerJS and Room connection
   useEffect(() => {
     if (!roomId) return;
     let isCancelled = false;
     let heartbeatInterval: ReturnType<typeof setInterval>;
-    const pendingIncomingCalls = pendingIncomingCallsRef.current;
 
     async function init() {
       // Dynamic import to prevent SSR issues in Next.js
@@ -404,15 +498,12 @@ export function useWebRTC({
           return;
         }
 
-        const stream = localStreamRef.current;
-        if (!stream) {
-          // Wait briefly for lobby capture to settle so a just-joined peer gets
-          // a two-way call instead of a permanently one-way call.
-          pendingIncomingCallsRef.current.set(call.peer, call);
-          call.on("close", () => pendingIncomingCallsRef.current.delete(call.peer));
-          return;
+        try {
+          call.answer(createCallStream(localStreamRef.current));
+        } catch (error) {
+          console.warn("Could not attach local media to the incoming call:", error);
+          call.answer();
         }
-        call.answer(stream);
         setupMediaCall(call, meta?.name, false);
       });
 
@@ -448,30 +539,14 @@ export function useWebRTC({
       // Close all connections and peer
       activeCallsRef.current.forEach((call) => call.close());
       activeCallsRef.current.clear();
-      pendingIncomingCalls.forEach((call) => call.close());
-      pendingIncomingCalls.clear();
       activeConnectionsRef.current.forEach((conn) => conn.close());
       activeConnectionsRef.current.clear();
+      stopPlaceholderMedia();
       if (peerInstanceRef.current) {
         peerInstanceRef.current.destroy();
       }
     };
-  }, [roomId, userName, pin, isHost, setupDataConnection, setupMediaCall, connectToPeer, onNotice]);
-
-  // If joining beat getUserMedia, answer any waiting incoming call once the
-  // local stream arrives so the other participant receives our tracks too.
-  useEffect(() => {
-    if (!localStream) return;
-    pendingIncomingCallsRef.current.forEach((call, remotePeerId) => {
-      try {
-        call.answer(localStream);
-        setupMediaCall(call, (call.metadata as any)?.name, false);
-        pendingIncomingCallsRef.current.delete(remotePeerId);
-      } catch (error) {
-        console.warn("Could not answer pending media call:", remotePeerId, error);
-      }
-    });
-  }, [localStream, setupMediaCall]);
+  }, [roomId, userName, pin, isHost, setupDataConnection, setupMediaCall, connectToPeer, createCallStream, stopPlaceholderMedia, onNotice]);
 
   // Audio level meter for speaking indicator on local stream
   useEffect(() => {
@@ -536,60 +611,70 @@ export function useWebRTC({
     });
   }, [userName, broadcast]);
 
-  // Toggle local microphone
-  const toggleMic = useCallback(() => {
-    if (localStreamRef.current) {
-      const audioTrack = localStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setMicOn(audioTrack.enabled);
-        micOnRef.current = audioTrack.enabled;
-        broadcast({
-          type: "state-update",
-          peerId: localPeerId,
-          micOn: audioTrack.enabled,
-          cameraOn: cameraOnRef.current,
-          isSpeaking: false,
-        });
-      }
-    } else {
-      setMicOn((prev) => {
-        const next = !prev;
-        micOnRef.current = next;
-        return next;
-      });
-    }
-  }, [localPeerId, broadcast]);
+  const ensureLocalTrack = useCallback(async (kind: "audio" | "video") => {
+    const currentStream = localStreamRef.current;
+    const existingTrack = currentStream?.getTracks().find(
+      (track) => track.kind === kind && track.readyState === "live"
+    );
+    if (existingTrack) return existingTrack;
 
-  // Toggle local camera
-  const toggleCamera = useCallback(() => {
-    if (localStreamRef.current) {
-      const videoTrack = localStreamRef.current.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setCameraOn(videoTrack.enabled);
-        cameraOnRef.current = videoTrack.enabled;
-        broadcast({
-          type: "state-update",
-          peerId: localPeerId,
-          micOn: micOnRef.current,
-          cameraOn: videoTrack.enabled,
-        });
-        return;
-      }
+    try {
+      const captured = await getLocalMediaStream({ audio: kind === "audio", video: kind === "video" });
+      const newTrack = captured.getTracks().find((track) => track.kind === kind && track.readyState === "live");
+      if (!newTrack) throw new Error(`No ${kind} track was returned by the browser.`);
+
+      const retainedTracks = currentStream?.getTracks().filter(
+        (track) => track.kind !== kind && track.readyState === "live"
+      ) ?? [];
+      currentStream?.getTracks().filter((track) => track.kind === kind).forEach((track) => track.stop());
+      const nextStream = new MediaStream([...retainedTracks, newTrack]);
+      localStreamRef.current = nextStream;
+      onLocalStreamChange?.(nextStream);
+      syncCallTracks(nextStream);
+      return newTrack;
+    } catch (error) {
+      console.warn(`Could not enable ${kind}:`, error);
+      onNotice?.(`Could not access your ${kind === "audio" ? "microphone" : "camera"}. Check browser permissions.`);
+      return null;
     }
-    setCameraOn((prev) => {
-      const next = !prev;
-      cameraOnRef.current = next;
-      broadcast({
-        type: "state-update",
-        peerId: localPeerId,
-        micOn: micOnRef.current,
-        cameraOn: next,
-      });
-      return next;
+  }, [onLocalStreamChange, onNotice, syncCallTracks]);
+
+  // Toggle local microphone. If capture was unavailable at join, request it now.
+  const toggleMic = useCallback(async () => {
+    const next = !micOnRef.current;
+    let audioTrack = localStreamRef.current?.getAudioTracks().find((track) => track.readyState === "live") ?? null;
+    if (next && !audioTrack) audioTrack = await ensureLocalTrack("audio");
+    if (next && !audioTrack) return;
+    if (audioTrack) audioTrack.enabled = next;
+
+    setMicOn(next);
+    micOnRef.current = next;
+    broadcast({
+      type: "state-update",
+      peerId: localPeerId,
+      micOn: next,
+      cameraOn: cameraOnRef.current,
+      isSpeaking: false,
     });
-  }, [localPeerId, broadcast]);
+  }, [localPeerId, broadcast, ensureLocalTrack]);
+
+  // Toggle local camera. If capture was unavailable at join, request it now.
+  const toggleCamera = useCallback(async () => {
+    const next = !cameraOnRef.current;
+    let videoTrack = localStreamRef.current?.getVideoTracks().find((track) => track.readyState === "live") ?? null;
+    if (next && !videoTrack) videoTrack = await ensureLocalTrack("video");
+    if (next && !videoTrack) return;
+    if (videoTrack) videoTrack.enabled = next;
+
+    setCameraOn(next);
+    cameraOnRef.current = next;
+    broadcast({
+      type: "state-update",
+      peerId: localPeerId,
+      micOn: micOnRef.current,
+      cameraOn: next,
+    });
+  }, [localPeerId, broadcast, ensureLocalTrack]);
 
   // Stop Screen Sharing
   const stopScreenShare = useCallback(() => {
@@ -694,13 +779,12 @@ export function useWebRTC({
       }).catch(() => {});
     }
     activeCallsRef.current.forEach((c) => c.close());
-    pendingIncomingCallsRef.current.forEach((c) => c.close());
-    pendingIncomingCallsRef.current.clear();
     activeConnectionsRef.current.forEach((c) => c.close());
     if (peerInstanceRef.current) {
       peerInstanceRef.current.destroy();
     }
-  }, [roomId]);
+    stopPlaceholderMedia();
+  }, [roomId, stopPlaceholderMedia]);
 
   return {
     localPeerId,

@@ -43,6 +43,10 @@ export default function MeetingRoomClient({
 
   const localStreamRef = useRef<MediaStream | null>(null);
   localStreamRef.current = localStream;
+  const micOnRef = useRef(micOn);
+  micOnRef.current = micOn;
+  const cameraOnRef = useRef(cameraOn);
+  cameraOnRef.current = cameraOn;
 
   // Unload & unmount cleanup to guarantee camera light turns off
   useEffect(() => {
@@ -104,6 +108,20 @@ export default function MeetingRoomClient({
           stopMediaStream(stream);
           return;
         }
+        const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
+        if (audioTrack) {
+          audioTrack.enabled = micOnRef.current;
+        } else {
+          micOnRef.current = false;
+          setMicOn(false);
+        }
+        const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
+        if (videoTrack) {
+          videoTrack.enabled = cameraOnRef.current;
+        } else {
+          cameraOnRef.current = false;
+          setCameraOn(false);
+        }
         setLocalStream(stream);
 
         const devs = await getAvailableDevices();
@@ -114,6 +132,10 @@ export default function MeetingRoomClient({
         }
       } catch (err: unknown) {
         console.warn("Could not acquire media stream for lobby:", err);
+        micOnRef.current = false;
+        cameraOnRef.current = false;
+        setMicOn(false);
+        setCameraOn(false);
         flash("Could not access camera/microphone. You can still join.");
       }
     }
@@ -133,6 +155,10 @@ export default function MeetingRoomClient({
         audio: { deviceId },
         video: selectedVideoDevice ? { deviceId: selectedVideoDevice } : true,
       });
+      const newAudioTrack = newStream.getAudioTracks()[0];
+      if (newAudioTrack) newAudioTrack.enabled = micOnRef.current;
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (newVideoTrack) newVideoTrack.enabled = cameraOnRef.current;
       stopMediaStream(localStream);
       setLocalStream(newStream);
     } catch (e) {
@@ -148,6 +174,10 @@ export default function MeetingRoomClient({
         audio: selectedAudioDevice ? { deviceId: selectedAudioDevice } : true,
         video: { deviceId },
       });
+      const newAudioTrack = newStream.getAudioTracks()[0];
+      if (newAudioTrack) newAudioTrack.enabled = micOnRef.current;
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (newVideoTrack) newVideoTrack.enabled = cameraOnRef.current;
       stopMediaStream(localStream);
       setLocalStream(newStream);
     } catch (e) {
@@ -161,10 +191,13 @@ export default function MeetingRoomClient({
       const track = localStream.getAudioTracks()[0];
       if (track) {
         track.enabled = !track.enabled;
+        micOnRef.current = track.enabled;
         setMicOn(track.enabled);
       }
     } else {
-      setMicOn((prev) => !prev);
+      const next = !micOnRef.current;
+      micOnRef.current = next;
+      setMicOn(next);
     }
   }, [localStream]);
 
@@ -173,11 +206,14 @@ export default function MeetingRoomClient({
       const track = localStream.getVideoTracks()[0];
       if (track) {
         track.enabled = !track.enabled;
+        cameraOnRef.current = track.enabled;
         setCameraOn(track.enabled);
         return;
       }
     }
-    setCameraOn((prev) => !prev);
+    const next = !cameraOnRef.current;
+    cameraOnRef.current = next;
+    setCameraOn(next);
   }, [localStream]);
 
   // WebRTC connection
@@ -185,11 +221,18 @@ export default function MeetingRoomClient({
     roomId: joined ? id : "",
     userName,
     localStream,
+    onLocalStreamChange: setLocalStream,
     pin: roomPin,
     initialMicOn: micOn,
     initialCameraOn: cameraOn,
     onNotice: flash,
   });
+
+  useEffect(() => {
+    if (!joined) return;
+    micOnRef.current = webrtc.micOn;
+    cameraOnRef.current = webrtc.cameraOn;
+  }, [joined, webrtc.micOn, webrtc.cameraOn]);
 
   // Call duration counter
   useEffect(() => {
